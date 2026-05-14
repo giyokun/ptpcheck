@@ -1,6 +1,6 @@
-# Multi-Protocol Sync Monitor for Windows
+# Multi-Protocol Sync Monitor
 
-A Python-based network monitoring tool for capturing and analyzing synchronization protocols used in professional AV and digital signage systems.
+A cross-platform Python-based network monitoring tool for capturing and analyzing synchronization protocols used in professional AV and digital signage systems.
 
 ## Supported Protocols
 
@@ -19,18 +19,20 @@ A Python-based network monitoring tool for capturing and analyzing synchronizati
 ## Requirements
 
 - Python 3.7+
-- Windows OS (uses `WindowsSelectorEventLoopPolicy`)
-- Administrator/elevated privileges (for multicast socket binding)
+- Windows, macOS, or Linux
+- Root/Administrator privileges recommended (for multicast socket binding)
 
 ## Installation
 
 1. Clone or download this repository
 2. No additional dependencies required (uses Python standard library)
 
-Optional: For interface selection by name, install `netifaces`:
+**Optional but recommended** - For interface selection by name, install `netifaces`:
 ```bash
 pip install netifaces
 ```
+
+Without `netifaces`, you can still specify interfaces by IP address directly.
 
 ## Usage
 
@@ -38,7 +40,25 @@ pip install netifaces
 
 Monitor both PTP and BrightSign protocols on all interfaces:
 ```bash
+# Most systems
 python ptpcheck.py
+
+# Or use python3 explicitly
+python3 ptpcheck.py
+```
+
+### Running with Elevated Privileges
+
+For best results, run with administrator/root privileges:
+
+**Windows (PowerShell as Administrator):**
+```powershell
+python ptpcheck.py
+```
+
+**macOS/Linux:**
+```bash
+sudo python3 ptpcheck.py
 ```
 
 ### Command Line Options
@@ -68,7 +88,22 @@ Monitor only BrightSign on custom port:
 python ptpcheck.py --no-ptp -b 6000
 ```
 
-Monitor on specific interface with file logging:
+Monitor on specific interface (Linux):
+```bash
+sudo python3 ptpcheck.py -i eth0
+```
+
+Monitor on specific interface (macOS):
+```bash
+sudo python3 ptpcheck.py -i en0
+```
+
+Monitor on specific interface (Windows):
+```bash
+python ptpcheck.py -i 192.168.1.10
+```
+
+Monitor with file logging:
 ```bash
 python ptpcheck.py -i 192.168.1.10 -o sync_log.txt
 ```
@@ -76,6 +111,27 @@ python ptpcheck.py -i 192.168.1.10 -o sync_log.txt
 Monitor custom PTP multicast group:
 ```bash
 python ptpcheck.py -g 224.0.1.130
+```
+
+### Finding Network Interfaces
+
+**Linux:**
+```bash
+ip addr show
+# or
+ifconfig
+```
+
+**macOS:**
+```bash
+ifconfig
+# Common interfaces: en0 (Ethernet/WiFi), en1, etc.
+```
+
+**Windows:**
+```bash
+ipconfig
+# Use the IPv4 address directly with -i option
 ```
 
 ## Output Format
@@ -132,19 +188,36 @@ Based on actual BrightSign player implementation:
 ## Troubleshooting
 
 **No packets received:**
-- Ensure you're running with administrator/elevated privileges
+- Ensure you're running with administrator/root privileges
 - Verify network interface is connected to the correct network
-- Check Windows Firewall settings for UDP ports 319, 320, and 5000
+- Check firewall settings for UDP ports 319, 320, and 5000
 - Confirm PTP devices are on the same network segment (multicast traffic doesn't route)
+- Try specifying the interface explicitly with `-i`
 
 **"Permission denied" errors:**
-- Run command prompt or PowerShell as Administrator
+- **Windows:** Run PowerShell or Command Prompt as Administrator
+- **macOS/Linux:** Use `sudo` to run the script
 - Check that no other application is binding to the same ports
 
 **BrightSign messages not appearing:**
 - Verify BrightSign players are configured to send sync messages
 - Check that the UDP port matches (default is 5000)
 - Ensure players are on the same network
+
+**Interface selection issues:**
+- Install `netifaces`: `pip install netifaces`
+- Or use IP address directly: `-i 192.168.1.10`
+- Check interface names with `ip addr` (Linux), `ifconfig` (macOS), or `ipconfig` (Windows)
+
+**macOS multicast issues:**
+- Ensure multicast routing is enabled
+- Try specifying interface explicitly: `-i en0`
+- Check firewall settings in System Preferences > Security & Privacy
+
+**Linux multicast issues:**
+- Check firewall rules: `sudo iptables -L`
+- Verify IGMP is enabled: `cat /proc/sys/net/ipv4/conf/all/force_igmp_version`
+- Try specifying interface: `-i eth0`
 
 ## File Logging
 
@@ -159,11 +232,29 @@ The log file is appended to (not overwritten) and flushed after each write for r
 
 This tool is provided as-is for network monitoring and diagnostics purposes.
 
+## Platform-Specific Notes
+
+### Windows
+- Uses `WindowsSelectorEventLoopPolicy` for proper asyncio socket support
+- Interface names may not work - use IP addresses with `-i` instead
+- No additional socket options required
+
+### macOS
+- Requires `SO_REUSEPORT` socket option for multicast (automatically handled)
+- Common interfaces: `en0` (primary Ethernet/WiFi), `en1`, etc.
+- May need to allow incoming connections in firewall settings
+
+### Linux
+- Requires `SO_REUSEADDR` for socket binding (automatically handled)
+- Common interfaces: `eth0`, `wlan0`, `enp0s3`, etc.
+- Works best with `netifaces` installed for interface lookup
+
 ## Contributing
 
 Contributions welcome! Areas for enhancement:
 - Support for PTP over Ethernet (Layer 2)
 - PTPv1 (IEEE 1588-2002) support
-- Additional digital signage protocols
+- Additional digital signage protocols (Crestron, Extron, etc.)
 - Enhanced statistics and analysis features
-- Cross-platform support (Linux, macOS)
+- GUI interface
+- Packet capture export (pcap format)

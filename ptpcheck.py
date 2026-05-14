@@ -199,7 +199,7 @@ class MultiProtocolMonitor:
     def _print_header(self):
         """Print monitoring configuration header."""
         print("=" * 90)
-        print(f"Multi-Protocol Sync Monitor for Windows")
+        print(f"Multi-Protocol Sync Monitor")
         print(f"Platform: {platform.system()} {platform.release()}")
         print(f"Interface IP: {self.interface_ip}")
         print(f"Monitoring: ", end="")
@@ -215,20 +215,36 @@ class MultiProtocolMonitor:
     
     def create_multicast_socket(self, port: int) -> socket.socket:
         """
-        Create a Windows-compatible multicast socket.
+        Create a cross-platform multicast socket.
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        # macOS and some BSD systems need SO_REUSEPORT for multicast
+        if hasattr(socket, 'SO_REUSEPORT'):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except (OSError, AttributeError):
+                pass  # Not supported on this platform
+
         sock.bind(('', port))
-        
+
         # Join multicast group for PTP ports only
         if port in [PTP_EVENT_PORT, PTP_GENERAL_PORT]:
-            mreq = struct.pack("4sl", socket.inet_aton(self.multicast_group), 
-                              socket.INADDR_ANY)
+            # Determine interface address for multicast membership
+            if self.interface_ip and self.interface_ip != "0.0.0.0":
+                # Bind to specific interface
+                mreq = struct.pack("4s4s", socket.inet_aton(self.multicast_group),
+                                  socket.inet_aton(self.interface_ip))
+            else:
+                # Bind to any interface
+                mreq = struct.pack("4sl", socket.inet_aton(self.multicast_group),
+                                  socket.INADDR_ANY)
+
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
-        
+
         sock.setblocking(False)
         return sock
     
@@ -238,6 +254,14 @@ class MultiProtocolMonitor:
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        # macOS and some BSD systems need SO_REUSEPORT
+        if hasattr(socket, 'SO_REUSEPORT'):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except (OSError, AttributeError):
+                pass  # Not supported on this platform
+
         sock.bind(('', port))
         sock.setblocking(False)
         return sock
@@ -374,45 +398,71 @@ class MultiProtocolMonitor:
         self.running = False
 
 async def get_interface_ip(interface_name: Optional[str] = None) -> str:
-    """Get IP address of a network interface."""
-    if interface_name:
-        try:
-            import netifaces
-            iface_addrs = netifaces.ifaddresses(interface_name)
-            if netifaces.AF_INET in iface_addrs:
-                return iface_addrs[netifaces.AF_INET][0]['addr']
-        except (ImportError, ValueError, KeyError):
-            pass
-    
+    """
+    Get IP address of a network interface.
+    Supports interface name (e.g., 'eth0', 'en0') or direct IP address.
+    """
+    if not interface_name:
+        return "0.0.0.0"
+
+    # Check if it's already an IP address
+    try:
+        socket.inet_aton(interface_name)
+        return interface_name
+    except OSError:
+        pass  # Not an IP address, treat as interface name
+
+    # Try to get IP from interface name
+    try:
+        import netifaces
+        iface_addrs = netifaces.ifaddresses(interface_name)
+        if netifaces.AF_INET in iface_addrs:
+            return iface_addrs[netifaces.AF_INET][0]['addr']
+    except ImportError:
+        print("Warning: 'netifaces' module not found. Install with: pip install netifaces")
+    except (ValueError, KeyError, OSError) as e:
+        print(f"Warning: Could not get IP for interface '{interface_name}': {e}")
+
     return "0.0.0.0"
 
 async def main():
     """Main entry point."""
     import argparse
-    
-    parser = argparse.ArgumentParser(description="Multi-Protocol Sync Monitor for Windows")
-    parser.add_argument("--interface", "-i", help="Network interface name or IP", 
+
+    parser = argparse.ArgumentParser(
+        description="Multi-Protocol Sync Monitor (PTP and BrightSign)",
+        epilog="Examples:\n"
+               "  %(prog)s                          # Monitor all protocols on all interfaces\n"
+               "  %(prog)s -i eth0                  # Monitor on specific interface (Linux)\n"
+               "  %(prog)s -i en0                   # Monitor on specific interface (macOS)\n"
+               "  %(prog)s -i 192.168.1.10          # Monitor on specific IP address\n"
+               "  %(prog)s --no-ptp                 # Monitor only BrightSign\n"
+               "  %(prog)s -b 6000 -o log.txt       # Custom port with logging\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--interface", "-i",
+                       help="Network interface name (e.g., eth0, en0, wlan0) or IP address",
                        default=None)
-    parser.add_argument("--group", "-g", help="PTP multicast group address", 
+    parser.add_argument("--group", "-g", help="PTP multicast group address",
                        default=PTP_MULTICAST_IPV4)
-    parser.add_argument("--brightsign-port", "-b", type=int, 
-                       help=f"BrightSign Sync UDP port (default: {BRIGHTSIGN_DEFAULT_PORT})", 
+    parser.add_argument("--brightsign-port", "-b", type=int,
+                       help=f"BrightSign Sync UDP port (default: {BRIGHTSIGN_DEFAULT_PORT})",
                        default=BRIGHTSIGN_DEFAULT_PORT)
-    parser.add_argument("--output", "-o", help="Output file for logging", 
+    parser.add_argument("--output", "-o", help="Output file for logging",
                        default=None)
-    parser.add_argument("--no-ptp", action="store_true", 
+    parser.add_argument("--no-ptp", action="store_true",
                        help="Disable PTP monitoring")
-    parser.add_argument("--no-brightsign", action="store_true", 
+    parser.add_argument("--no-brightsign", action="store_true",
                        help="Disable BrightSign monitoring")
-    
+
     args = parser.parse_args()
-    
+
     # Get interface IP
     interface_ip = await get_interface_ip(args.interface)
     if args.interface and interface_ip == "0.0.0.0":
         print(f"Warning: Could not get IP for interface '{args.interface}'. "
               f"Using 0.0.0.0 (all interfaces)")
-    
+
     # Create and start monitor
     monitor = MultiProtocolMonitor(
         interface_ip=interface_ip,
@@ -422,7 +472,7 @@ async def main():
         enable_brightsign=not args.no_brightsign,
         output_file=args.output
     )
-    
+
     try:
         await monitor.start_monitoring()
     except KeyboardInterrupt:
@@ -430,12 +480,16 @@ async def main():
     finally:
         await monitor.cleanup()
 
-def run_windows_event_loop():
-    """Windows-specific event loop configuration."""
+def run_event_loop():
+    """
+    Cross-platform event loop configuration.
+    Uses WindowsSelectorEventLoopPolicy on Windows for better compatibility.
+    """
     if platform.system() == "Windows":
+        # Windows needs SelectorEventLoop for proper socket support
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
+
     asyncio.run(main())
 
 if __name__ == "__main__":
-    run_windows_event_loop()
+    run_event_loop()
